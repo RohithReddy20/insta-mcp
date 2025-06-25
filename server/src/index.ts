@@ -1,9 +1,7 @@
 import dotenv from "dotenv";
 import express from "express";
-import {
-  McpServer,
-  StdioServerTransport,
-} from "@modelcontextprotocol/sdk/server";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
   getInstagramAuthUrl,
@@ -39,13 +37,21 @@ const mcpServer = new McpServer({
 });
 
 // Register Instagram Authentication Tool
-mcpServer.tool(
+mcpServer.registerTool(
   "instagram-auth",
-  "Generates an Instagram OAuth URL for authentication.",
-  instagramAuthInputSchema,
-  async (input) => {
+  {
+    title: "Instagram Authentication",
+    description: "Generates an Instagram OAuth URL for authentication.",
+    inputSchema: {
+      redirectUri: z
+        .string()
+        .url()
+        .describe("The redirect URI for OAuth callback."),
+    },
+  },
+  async ({ redirectUri }: { redirectUri: string }) => {
     try {
-      const result = getInstagramAuthUrl(input);
+      const result = getInstagramAuthUrl({ redirectUri });
       return {
         content: [
           {
@@ -67,13 +73,48 @@ mcpServer.tool(
 );
 
 // Register Post Image Tool
-mcpServer.tool(
+mcpServer.registerTool(
   "instagram-post-image",
-  "Posts an image to Instagram.",
-  instagramPostImageInputSchema,
-  async (input) => {
+  {
+    title: "Post Image to Instagram",
+    description: "Posts an image to Instagram.",
+    inputSchema: {
+      igUserId: z
+        .string()
+        .describe("The Instagram User ID of the account to post to."),
+      imageUrl: z
+        .string()
+        .url()
+        .describe(
+          "The public URL of the image to post (must be JPEG and HTTPS)."
+        ),
+      caption: z
+        .string()
+        .optional()
+        .describe("The caption for the image post."),
+      userAccessToken: z
+        .string()
+        .describe("The access token of the Instagram user."),
+    },
+  },
+  async ({
+    igUserId,
+    imageUrl,
+    caption,
+    userAccessToken,
+  }: {
+    igUserId: string;
+    imageUrl: string;
+    caption?: string;
+    userAccessToken: string;
+  }) => {
     try {
-      const result = await postImageToInstagram(input);
+      const result = await postImageToInstagram({
+        igUserId,
+        imageUrl,
+        caption,
+        userAccessToken,
+      });
       return {
         content: [
           {
@@ -96,13 +137,61 @@ mcpServer.tool(
 );
 
 // Register Post Carousel Tool
-mcpServer.tool(
+mcpServer.registerTool(
   "instagram-post-carousel",
-  "Posts a carousel of images/videos to Instagram.",
-  instagramPostCarouselInputSchema,
-  async (input) => {
+  {
+    title: "Post Carousel to Instagram",
+    description: "Posts a carousel of images/videos to Instagram.",
+    inputSchema: {
+      igUserId: z
+        .string()
+        .describe("The Instagram User ID of the account to post to."),
+      mediaItems: z
+        .array(
+          z.object({
+            type: z
+              .enum(["IMAGE", "VIDEO"])
+              .describe("Type of media: IMAGE or VIDEO."),
+            url: z
+              .string()
+              .url()
+              .describe(
+                "Public URL of the image or video (HTTPS required for images, must be JPEG)."
+              ),
+          })
+        )
+        .min(2)
+        .max(10)
+        .describe(
+          "Array of media items (2-10 items). IMPORTANT: For videos, ensure they meet Instagram's specifications."
+        ),
+      caption: z
+        .string()
+        .optional()
+        .describe("The caption for the carousel post."),
+      userAccessToken: z
+        .string()
+        .describe("The access token of the Instagram user."),
+    },
+  },
+  async ({
+    igUserId,
+    userAccessToken,
+    mediaItems,
+    caption,
+  }: {
+    igUserId: string;
+    userAccessToken: string;
+    mediaItems: Array<{ type: "IMAGE" | "VIDEO"; url: string }>;
+    caption?: string;
+  }) => {
     try {
-      const result = await postCarouselToInstagram(input);
+      const result = await postCarouselToInstagram({
+        igUserId,
+        userAccessToken,
+        mediaItems,
+        caption,
+      });
       return {
         content: [
           {
@@ -124,13 +213,62 @@ mcpServer.tool(
 );
 
 // Register Post Reel Tool
-mcpServer.tool(
+mcpServer.registerTool(
   "instagram-post-reel",
-  "Posts a Reel to Instagram.",
-  instagramPostReelInputSchema,
-  async (input) => {
+  {
+    title: "Post Reel to Instagram",
+    description: "Posts a Reel to Instagram.",
+    inputSchema: {
+      igUserId: z
+        .string()
+        .describe("The Instagram User ID of the account to post to."),
+      videoUrl: z
+        .string()
+        .url()
+        .describe("Public URL of the video to post as a Reel."),
+      coverUrl: z
+        .string()
+        .url()
+        .optional()
+        .describe(
+          "Public URL of the cover image for the Reel. If not provided, Instagram will use the first frame."
+        ),
+      caption: z.string().optional().describe("The caption for the Reel."),
+      userAccessToken: z
+        .string()
+        .describe("The access token of the Instagram user."),
+      shareToFeed: z
+        .boolean()
+        .optional()
+        .describe(
+          "Whether to also share the Reel to the main feed (default: true if not specified by IG). Check API docs for current default behavior if not explicitly set."
+        ),
+    },
+  },
+  async ({
+    igUserId,
+    userAccessToken,
+    videoUrl,
+    caption,
+    coverUrl,
+    shareToFeed,
+  }: {
+    igUserId: string;
+    userAccessToken: string;
+    videoUrl: string;
+    caption?: string;
+    coverUrl?: string;
+    shareToFeed?: boolean;
+  }) => {
     try {
-      const result = await postReelToInstagram(input);
+      const result = await postReelToInstagram({
+        igUserId,
+        userAccessToken,
+        videoUrl,
+        caption,
+        coverUrl,
+        shareToFeed,
+      });
       return {
         content: [
           {

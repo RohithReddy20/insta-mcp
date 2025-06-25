@@ -1,5 +1,5 @@
-import { z } from 'zod';
-import fetch, { Response } from 'node-fetch';
+import { z } from "zod";
+import fetch, { Response } from "node-fetch";
 
 // Based on instagram.service.ts
 const GRAPH_API_VERSION = "v19.0";
@@ -29,34 +29,72 @@ class InstagramApiError extends Error {
   }
 }
 
-function handleInstagramError(error: any, response?: Response): InstagramApiError {
-    if (error instanceof InstagramApiError) return error;
-    if (error.error && typeof error.error === 'object') {
-      const igError = error.error;
-      let errorType = InstagramErrorType.INVALID_REQUEST;
-      if (igError.code === 190) errorType = InstagramErrorType.EXPIRED_TOKEN;
-      else if (igError.code === 100 || igError.code === 200) errorType = InstagramErrorType.INSUFFICIENT_SCOPE;
-      else if (igError.code === 4 || igError.code === 17) errorType = InstagramErrorType.RATE_LIMIT;
-      return new InstagramApiError(igError.message || 'Instagram API error', errorType, igError.code, igError.fbtrace_id, error);
-    }
-     if (response && !response.ok) {
-      return new InstagramApiError(error.message || `HTTP error ${response.status}`, InstagramErrorType.NETWORK_ERROR, response.status, undefined, error);
-    }
-    return new InstagramApiError(error.message || 'Unknown error', InstagramErrorType.UNKNOWN_ERROR, undefined, undefined, error);
+function handleInstagramError(
+  error: any,
+  response?: Response
+): InstagramApiError {
+  if (error instanceof InstagramApiError) return error;
+  if (error.error && typeof error.error === "object") {
+    const igError = error.error;
+    let errorType = InstagramErrorType.INVALID_REQUEST;
+    if (igError.code === 190) errorType = InstagramErrorType.EXPIRED_TOKEN;
+    else if (igError.code === 100 || igError.code === 200)
+      errorType = InstagramErrorType.INSUFFICIENT_SCOPE;
+    else if (igError.code === 4 || igError.code === 17)
+      errorType = InstagramErrorType.RATE_LIMIT;
+    return new InstagramApiError(
+      igError.message || "Instagram API error",
+      errorType,
+      igError.code,
+      igError.fbtrace_id,
+      error
+    );
+  }
+  if (response && !response.ok) {
+    return new InstagramApiError(
+      error.message || `HTTP error ${response.status}`,
+      InstagramErrorType.NETWORK_ERROR,
+      response.status,
+      undefined,
+      error
+    );
+  }
+  return new InstagramApiError(
+    error.message || "Unknown error",
+    InstagramErrorType.UNKNOWN_ERROR,
+    undefined,
+    undefined,
+    error
+  );
 }
 
 // Define the schema for individual media items in the carousel
 const carouselMediaItemSchema = z.object({
-  type: z.enum(['IMAGE', 'VIDEO']).describe("Type of media: IMAGE or VIDEO."),
-  url: z.string().url().describe("Public URL of the image or video (HTTPS required for images, must be JPEG)."),
+  type: z.enum(["IMAGE", "VIDEO"]).describe("Type of media: IMAGE or VIDEO."),
+  url: z
+    .string()
+    .url()
+    .describe(
+      "Public URL of the image or video (HTTPS required for images, must be JPEG)."
+    ),
 });
 
 // Define the schema for the tool input
 export const instagramPostCarouselInputSchema = z.object({
-  igUserId: z.string().describe("The Instagram User ID of the account to post to."),
-  mediaItems: z.array(carouselMediaItemSchema).min(2).max(10).describe("Array of media items (2-10 items). IMPORTANT: For videos, ensure they meet Instagram's specifications."),
+  igUserId: z
+    .string()
+    .describe("The Instagram User ID of the account to post to."),
+  mediaItems: z
+    .array(carouselMediaItemSchema)
+    .min(2)
+    .max(10)
+    .describe(
+      "Array of media items (2-10 items). IMPORTANT: For videos, ensure they meet Instagram's specifications."
+    ),
   caption: z.string().optional().describe("The caption for the carousel post."),
-  userAccessToken: z.string().describe("The access token of the Instagram user."),
+  userAccessToken: z
+    .string()
+    .describe("The access token of the Instagram user."),
 });
 
 // Define the schema for the tool output
@@ -65,23 +103,24 @@ export const instagramPostCarouselOutputSchema = z.object({
   status: z.string().describe("Status of the carousel post creation"),
 });
 
-});
-
-// Define the schema for the tool output
-export const instagramPostCarouselOutputSchema = z.object({
-  postId: z.string().describe("The ID of the created Instagram carousel post."),
-  status: z.string().describe("Status of the carousel post creation"),
-});
-
-interface MediaContainerResponse { id: string; }
-interface PublishResponse { id: string; }
+interface MediaContainerResponse {
+  id: string;
+}
+interface PublishResponse {
+  id: string;
+}
 
 // Function to post a carousel to Instagram, adapted from instagram.service.ts
-export async function postCarouselToInstagram(input: z.infer<typeof instagramPostCarouselInputSchema>): Promise<z.infer<typeof instagramPostCarouselOutputSchema>> {
+export async function postCarouselToInstagram(
+  input: z.infer<typeof instagramPostCarouselInputSchema>
+): Promise<z.infer<typeof instagramPostCarouselOutputSchema>> {
   const { igUserId, mediaItems, caption, userAccessToken } = input;
 
   if (mediaItems.length < 2 || mediaItems.length > 10) {
-    throw new InstagramApiError("Carousel must have between 2 and 10 media items.", InstagramErrorType.INVALID_REQUEST);
+    throw new InstagramApiError(
+      "Carousel must have between 2 and 10 media items.",
+      InstagramErrorType.INVALID_REQUEST
+    );
   }
 
   // Note: instagram.service.ts implies IMAGE and VIDEO types are handled for carousel items.
@@ -106,8 +145,8 @@ export async function postCarouselToInstagram(input: z.infer<typeof instagramPos
 
       const itemContainerUrl = `${GRAPH_API_BASE_URL}/${igUserId}/media`;
       const itemResponse = await fetch(itemContainerUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: itemContainerParams.toString(),
       });
       const itemResponseData = await itemResponse.json();
@@ -115,10 +154,15 @@ export async function postCarouselToInstagram(input: z.infer<typeof instagramPos
       if (!itemResponse.ok) {
         throw handleInstagramError(itemResponseData, itemResponse);
       }
-      const { id: childContainerId } = itemResponseData as MediaContainerResponse;
-      if (!childContainerId) throw new InstagramApiError(`Media container ID not found for item ${item.url}.`, InstagramErrorType.UNKNOWN_ERROR);
+      const { id: childContainerId } =
+        itemResponseData as MediaContainerResponse;
+      if (!childContainerId)
+        throw new InstagramApiError(
+          `Media container ID not found for item ${item.url}.`,
+          InstagramErrorType.UNKNOWN_ERROR
+        );
       itemContainerIds.push(childContainerId);
-      
+
       // Polling for video children might be needed here if they are processed asynchronously
       // The provided service code for carousel doesn't show polling for children,
       // but it's a common pattern for videos. For simplicity here, we'll assume they are ready quickly
@@ -127,8 +171,8 @@ export async function postCarouselToInstagram(input: z.infer<typeof instagramPos
 
     // Step 2: Create parent carousel container
     const carouselContainerParams = new URLSearchParams({
-      media_type: 'CAROUSEL',
-      children: itemContainerIds.join(','),
+      media_type: "CAROUSEL",
+      children: itemContainerIds.join(","),
       access_token: userAccessToken,
     });
     if (caption) {
@@ -137,8 +181,8 @@ export async function postCarouselToInstagram(input: z.infer<typeof instagramPos
 
     const carouselContainerUrl = `${GRAPH_API_BASE_URL}/${igUserId}/media`;
     let response = await fetch(carouselContainerUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: carouselContainerParams.toString(),
     });
     let responseData = await response.json();
@@ -147,7 +191,11 @@ export async function postCarouselToInstagram(input: z.infer<typeof instagramPos
       throw handleInstagramError(responseData, response);
     }
     const { id: mainContainerId } = responseData as MediaContainerResponse;
-    if (!mainContainerId) throw new InstagramApiError("Main carousel container ID not found.", InstagramErrorType.UNKNOWN_ERROR);
+    if (!mainContainerId)
+      throw new InstagramApiError(
+        "Main carousel container ID not found.",
+        InstagramErrorType.UNKNOWN_ERROR
+      );
 
     // Step 3: Publish the main carousel container
     // Note: The service code for carousel doesn't show polling for the main CAROUSEL container.
@@ -160,8 +208,8 @@ export async function postCarouselToInstagram(input: z.infer<typeof instagramPos
 
     const publishUrl = `${GRAPH_API_BASE_URL}/${igUserId}/media_publish`;
     response = await fetch(publishUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: publishParams.toString(),
     });
     responseData = await response.json();
@@ -170,10 +218,13 @@ export async function postCarouselToInstagram(input: z.infer<typeof instagramPos
       throw handleInstagramError(responseData, response);
     }
     const { id: mediaId } = responseData as PublishResponse;
-    if (!mediaId) throw new InstagramApiError("Post ID not found in carousel publish response.", InstagramErrorType.UNKNOWN_ERROR);
-    
-    return { postId: mediaId, status: "Carousel posted successfully." };
+    if (!mediaId)
+      throw new InstagramApiError(
+        "Post ID not found in carousel publish response.",
+        InstagramErrorType.UNKNOWN_ERROR
+      );
 
+    return { postId: mediaId, status: "Carousel posted successfully." };
   } catch (error: any) {
     if (error instanceof InstagramApiError) throw error;
     throw handleInstagramError(error);

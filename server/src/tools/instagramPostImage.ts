@@ -91,7 +91,6 @@ export const instagramPostImageInputSchema = z.object({
 // Define the schema for the tool output
 export const instagramPostImageOutputSchema = z.object({
   postId: z.string().describe("The ID of the created Instagram post."),
-  postId: z.string().describe("The ID of the created Instagram post."),
   status: z.string().describe("Status of the post creation"),
 });
 
