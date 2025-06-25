@@ -1,5 +1,7 @@
 import { z } from "zod";
 import fetch, { Response } from "node-fetch"; // Assuming node-fetch for making HTTP requests in Node.js
+import * as fs from "fs";
+import * as path from "path";
 
 // Based on instagram.service.ts
 const GRAPH_API_VERSION = "v19.0";
@@ -75,17 +77,11 @@ function handleInstagramError(
 
 // Define the schema for the tool input
 export const instagramPostImageInputSchema = z.object({
-  igUserId: z
-    .string()
-    .describe("The Instagram User ID of the account to post to."),
   imageUrl: z
     .string()
     .url()
     .describe("The public URL of the image to post (must be JPEG and HTTPS)."),
   caption: z.string().optional().describe("The caption for the image post."),
-  userAccessToken: z
-    .string()
-    .describe("The access token of the Instagram user."),
 });
 
 // Define the schema for the tool output
@@ -138,7 +134,16 @@ interface PublishResponse {
 export async function postImageToInstagram(
   input: z.infer<typeof instagramPostImageInputSchema>
 ): Promise<z.infer<typeof instagramPostImageOutputSchema>> {
-  const { igUserId, imageUrl, caption, userAccessToken } = input;
+  const { imageUrl, caption } = input;
+  const userData = require("../../../user.json");
+  const { id: igUserId, accessToken: userAccessToken } = userData;
+
+  if (!igUserId || !userAccessToken) {
+    throw new InstagramApiError(
+      "The user.json file must contain 'id' and 'accessToken' properties.",
+      InstagramErrorType.INVALID_REQUEST
+    );
+  }
 
   try {
     // Step 1: Validate image URL (from instagram.service.ts)
