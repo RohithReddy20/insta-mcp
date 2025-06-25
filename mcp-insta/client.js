@@ -1,14 +1,13 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { fileURLToPath } from "url";
-import { z } from "zod";
 import dotenv from "dotenv";
 import readline from "readline";
 import path from "path";
 import os from "os";
 import OpenAI from "openai";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { McpClient } from "@modelcontextprotocol/sdk/client/mcp.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { Readable, Writable } from "stream";
 // Load environment variables from .env
 dotenv.config();
@@ -21,22 +20,30 @@ class MCPClient {
   }
 
   async connectToServer(serverScriptPath) {
-    if (!serverScriptPath.endsWith(".ts")) {
-      throw new Error("Server script must be a .ts file");
+    if (
+      !serverScriptPath.endsWith(".ts") &&
+      !serverScriptPath.endsWith(".js")
+    ) {
+      throw new Error("Server script must be a .ts or .js file");
     }
 
+    const isTypeScript = serverScriptPath.endsWith(".ts");
     const serverParams = {
       command: "node",
-      args: ["--loader", "ts-node/esm", serverScriptPath],
+      args: isTypeScript
+        ? ["--loader", "ts-node/esm", serverScriptPath]
+        : [serverScriptPath],
       env: process.env,
     };
     const transport = new StdioClientTransport(serverParams);
-    await transport.start();
 
-    this.session = new McpClient(transport);
-    this.exitStack.push(async () => await transport.stop());
+    this.session = new Client({
+      name: "mcp-insta-client",
+      version: "1.0.0",
+    });
+    this.exitStack.push(async () => await transport.close());
 
-    await this.session.initialize();
+    await this.session.connect(transport);
     const response = await this.session.listTools();
     const tools = response.tools;
     console.log(
@@ -46,7 +53,12 @@ class MCPClient {
   }
 
   async processQuery(query) {
-    const messages = [
+    const llmMessages = [
+      {
+        role: "system",
+        content:
+          "You are a helpful assistant. When a user asks a question that can be answered by one of your available tools, you must use the tool. After receiving the tool's output, provide a response to the user based on that output. If the question cannot be answered by a tool, or if you are unsure, answer to the best of your ability without using tools.",
+      },
       {
         role: "user",
         content: query,
@@ -59,59 +71,62 @@ class MCPClient {
       function: {
         name: tool.name,
         description: tool.description,
-        parameters: tool.inputSchema,
+        parameters: {
+          type: "object",
+          properties: tool.inputSchema.properties || {},
+          required: tool.inputSchema.required || [],
+        },
       },
     }));
 
-    // Initial OpenAI API call
-    let openAIResponse = await this.openai.chat.completions.create({
-      model: "gpt-4",
-      messages: messages,
-      tools: availableTools,
-      tool_choice: "auto",
-    });
-
-    let responseMessage = openAIResponse.choices[0].message;
-    messages.push(responseMessage); // Add assistant's response to messages
-
-    // Process response and handle tool calls
-    const final_text = [];
-
-    if (responseMessage.tool_calls) {
-      for (const toolCall of responseMessage.tool_calls) {
-        const toolName = toolCall.function.name;
-        const toolArgs = JSON.parse(toolCall.function.arguments);
-
-        // Execute tool call
-        final_text.push(
-          `[Calling tool ${toolName} with args ${JSON.stringify(toolArgs)}]`
-        );
-        const result = await this.session.callTool(toolName, toolArgs);
-
-        const toolResultContent = result.isError
-          ? `Error: ${result.content.map((c) => c.text).join("\\n")}`
-          : result.content.map((c) => c.text).join("\\n");
-
-        messages.push({
-          tool_call_id: toolCall.id,
-          role: "tool",
-          name: toolName,
-          content: toolResultContent,
-        });
-      }
-
-      // Get next response from OpenAI
-      const secondResponse = await this.openai.chat.completions.create({
-        model: "gpt-4",
-        messages: messages,
+    // Loop to handle tool calls until a final text response is generated
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const openAIResponse = await this.openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: llmMessages,
+        tools: availableTools.length > 0 ? availableTools : undefined,
+        tool_choice: availableTools.length > 0 ? "auto" : undefined,
       });
 
-      final_text.push(secondResponse.choices[0].message.content);
-    } else {
-      final_text.push(responseMessage.content);
-    }
+      const responseMessage = openAIResponse.choices[0].message;
 
-    return final_text.join("\\n");
+      if (responseMessage.tool_calls) {
+        // Add the assistant's decision to call tools to the history
+        llmMessages.push(responseMessage);
+
+        // Execute all tool calls
+        for (const toolCall of responseMessage.tool_calls) {
+          const toolName = toolCall.function.name;
+          const toolArgs = JSON.parse(toolCall.function.arguments);
+
+          console.log(
+            `[Calling tool ${toolName} with args ${JSON.stringify(toolArgs)}]`
+          );
+          const result = await this.session.callTool({
+            name: toolName,
+            arguments: toolArgs,
+          });
+
+          const toolResultContent = result.isError
+            ? `Error: ${result.content.map((c) => c.text).join("\\n")}`
+            : result.content.map((c) => c.text).join("\\n");
+
+          // Add the tool's result to the history
+          llmMessages.push({
+            tool_call_id: toolCall.id,
+            role: "tool",
+            name: toolName,
+            content: toolResultContent,
+          });
+        }
+        // Go back to the start of the loop to let the model process the tool results
+        continue;
+      } else {
+        // No tool calls, we have a final text response
+        return responseMessage.content;
+      }
+    }
   }
 
   async chatLoop() {

@@ -12,7 +12,8 @@
   "description": "",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.13.1",
-    "dotenv": "^16.4.5",
-    "openai": "^4.52.7"
+    "dotenv": "^16.5.0",
+    "openai": "^5.7.0",
+    "ts-node": "^10.9.2"
   }
 }

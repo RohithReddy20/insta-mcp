@@ -1,308 +1,343 @@
 import dotenv from "dotenv";
 import express from "express";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import path from "path";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
 import {
-  getInstagramAuthUrl,
-  instagramAuthInputSchema,
-} from "./tools/instagramAuth";
-import {
-  postImageToInstagram,
-  instagramPostImageInputSchema,
-} from "./tools/instagramPostImage";
-import {
-  postCarouselToInstagram,
-  instagramPostCarouselInputSchema,
-} from "./tools/instagramPostCarousel";
-import {
-  postReelToInstagram,
-  instagramPostReelInputSchema,
-} from "./tools/instagramPostReel";
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+import { getInstagramAuthUrl } from "./tools/instagramAuth.js";
+import { postImageToInstagram } from "./tools/instagramPostImage.js";
+import { postCarouselToInstagram } from "./tools/instagramPostCarousel.js";
+import { postReelToInstagram } from "./tools/instagramPostReel.js";
+
+// Enhanced logging utility
+function logError(context: string, error: any) {
+  console.error(`[ERROR] ${context}:`, {
+    message: error.message,
+    stack: error.stack,
+    type: error.type || "Unknown",
+    statusCode: error.statusCode,
+    fbTraceId: error.fbTraceId,
+    originalError: error.originalError,
+  });
+}
+
+function logInfo(context: string, data: any) {
+  console.error(`[INFO] ${context}:`, data);
+}
+
+function logDebug(context: string, data: any) {
+  console.error(`[DEBUG] ${context}:`, data);
+}
 
 // Load environment variables from .env.local
-dotenv.config({ path: ".env.local" });
+// Try multiple paths: current directory, server directory, and parent directory
+const envPaths = [
+  ".env.local",
+  path.resolve(process.cwd(), ".env.local"),
+  path.resolve(process.cwd(), "server/.env.local"),
+  path.resolve(process.cwd(), "../server/.env.local"),
+  path.resolve(process.cwd(), "../.env.local"),
+];
+
+let envLoaded = false;
+for (const envPath of envPaths) {
+  try {
+    const result = dotenv.config({ path: envPath });
+    if (result.parsed && !result.error) {
+      envLoaded = true;
+      break;
+    }
+  } catch (error) {
+    // Continue to next path
+  }
+}
+
+if (!envLoaded) {
+  console.warn("Warning: Could not load .env.local from any expected location");
+}
 
 const app = express();
 const port = process.env.PORT || 3000;
 
 // Create MCP server instance
-const mcpServer = new McpServer({
-  name: "instagram-server",
-  version: "1.0.0",
-  capabilities: {
-    resources: {},
-    tools: {},
+const server = new Server(
+  {
+    name: "instagram-server",
+    version: "1.0.0",
   },
+  {
+    capabilities: {
+      tools: {},
+    },
+  }
+);
+
+// Register tools list handler
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  return {
+    tools: [
+      {
+        name: "instagram-auth",
+        description: "Generates an Instagram OAuth URL for authentication.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            redirectUri: {
+              type: "string",
+              format: "uri",
+              description:
+                "The redirect URI for OAuth callback (optional, defaults to localhost:6001)",
+            },
+          },
+        },
+      },
+      {
+        name: "instagram-post-image",
+        description: "Posts an image to Instagram.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            imageUrl: {
+              type: "string",
+              format: "uri",
+              description:
+                "The public URL of the image to post (must be JPEG and HTTPS).",
+            },
+            caption: {
+              type: "string",
+              description: "The caption for the image post.",
+            },
+          },
+          required: ["imageUrl"],
+        },
+      },
+      {
+        name: "instagram-post-carousel",
+        description: "Posts a carousel of images/videos to Instagram.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            mediaItems: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  type: {
+                    type: "string",
+                    enum: ["IMAGE", "VIDEO"],
+                    description: "Type of media: IMAGE or VIDEO.",
+                  },
+                  url: {
+                    type: "string",
+                    format: "uri",
+                    description:
+                      "Public URL of the image or video (HTTPS required for images, must be JPEG).",
+                  },
+                },
+                required: ["type", "url"],
+              },
+              minItems: 2,
+              maxItems: 10,
+              description:
+                "Array of media items (2-10 items). IMPORTANT: For videos, ensure they meet Instagram's specifications.",
+            },
+            caption: {
+              type: "string",
+              description: "The caption for the carousel post.",
+            },
+          },
+          required: ["mediaItems"],
+        },
+      },
+      {
+        name: "instagram-post-reel",
+        description: "Posts a Reel to Instagram.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            videoUrl: {
+              type: "string",
+              format: "uri",
+              description: "Public URL of the video to post as a Reel.",
+            },
+            coverUrl: {
+              type: "string",
+              format: "uri",
+              description:
+                "Public URL of the cover image for the Reel. If not provided, Instagram will use the first frame.",
+            },
+            caption: {
+              type: "string",
+              description: "The caption for the Reel.",
+            },
+            shareToFeed: {
+              type: "boolean",
+              description:
+                "Whether to also share the Reel to the main feed (default: true if not specified by IG). Check API docs for current default behavior if not explicitly set.",
+            },
+          },
+          required: ["videoUrl"],
+        },
+      },
+    ],
+  };
 });
 
-// Register Instagram Authentication Tool
-mcpServer.registerTool(
-  "instagram-auth",
-  {
-    title: "Instagram Authentication",
-    description: "Generates an Instagram OAuth URL for authentication.",
-    inputSchema: {
-      redirectUri: z
-        .string()
-        .url()
-        .describe("The redirect URI for OAuth callback."),
-    },
-  },
-  async ({ redirectUri }: { redirectUri: string }) => {
-    try {
-      const result = getInstagramAuthUrl({ redirectUri });
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Instagram OAuth URL: ${result.oauthUrl}. State: ${result.state}`,
-          },
-        ],
-        output: result,
-      };
-    } catch (error: any) {
-      return {
-        isError: true,
-        content: [
-          { type: "text", text: `Error generating auth URL: ${error.message}` },
-        ],
-      };
-    }
-  }
-);
+// Register tool call handler
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
 
-// Register Post Image Tool
-mcpServer.registerTool(
-  "instagram-post-image",
-  {
-    title: "Post Image to Instagram",
-    description: "Posts an image to Instagram.",
-    inputSchema: {
-      igUserId: z
-        .string()
-        .describe("The Instagram User ID of the account to post to."),
-      imageUrl: z
-        .string()
-        .url()
-        .describe(
-          "The public URL of the image to post (must be JPEG and HTTPS)."
-        ),
-      caption: z
-        .string()
-        .optional()
-        .describe("The caption for the image post."),
-      userAccessToken: z
-        .string()
-        .describe("The access token of the Instagram user."),
-    },
-  },
-  async ({
-    igUserId,
-    imageUrl,
-    caption,
-    userAccessToken,
-  }: {
-    igUserId: string;
-    imageUrl: string;
-    caption?: string;
-    userAccessToken: string;
-  }) => {
-    try {
-      const result = await postImageToInstagram({
-        igUserId,
-        imageUrl,
-        caption,
-        userAccessToken,
-      });
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Image posted successfully! Post ID: ${result.postId}`,
-          },
-        ],
-        output: result,
-      };
-    } catch (error: any) {
-      return {
-        isError: true,
-        content: [
-          { type: "text", text: `Error posting image: ${error.message}` },
-        ],
-        // output: { errorType: error.type, statusCode: error.statusCode } // Example structured error
-      };
-    }
-  }
-);
+  logInfo("Tool Request", { tool: name, args });
 
-// Register Post Carousel Tool
-mcpServer.registerTool(
-  "instagram-post-carousel",
-  {
-    title: "Post Carousel to Instagram",
-    description: "Posts a carousel of images/videos to Instagram.",
-    inputSchema: {
-      igUserId: z
-        .string()
-        .describe("The Instagram User ID of the account to post to."),
-      mediaItems: z
-        .array(
-          z.object({
-            type: z
-              .enum(["IMAGE", "VIDEO"])
-              .describe("Type of media: IMAGE or VIDEO."),
-            url: z
-              .string()
-              .url()
-              .describe(
-                "Public URL of the image or video (HTTPS required for images, must be JPEG)."
-              ),
-          })
-        )
-        .min(2)
-        .max(10)
-        .describe(
-          "Array of media items (2-10 items). IMPORTANT: For videos, ensure they meet Instagram's specifications."
-        ),
-      caption: z
-        .string()
-        .optional()
-        .describe("The caption for the carousel post."),
-      userAccessToken: z
-        .string()
-        .describe("The access token of the Instagram user."),
-    },
-  },
-  async ({
-    igUserId,
-    userAccessToken,
-    mediaItems,
-    caption,
-  }: {
-    igUserId: string;
-    userAccessToken: string;
-    mediaItems: Array<{ type: "IMAGE" | "VIDEO"; url: string }>;
-    caption?: string;
-  }) => {
-    try {
-      const result = await postCarouselToInstagram({
-        igUserId,
-        userAccessToken,
-        mediaItems,
-        caption,
-      });
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Carousel posted successfully! Post ID: ${result.postId}`,
-          },
-        ],
-        output: result,
-      };
-    } catch (error: any) {
-      return {
-        isError: true,
-        content: [
-          { type: "text", text: `Error posting carousel: ${error.message}` },
-        ],
-      };
-    }
-  }
-);
+  try {
+    switch (name) {
+      case "instagram-auth": {
+        logDebug("Instagram Auth", "Processing auth request");
+        const { redirectUri } = (args as any) || {};
+        const result = getInstagramAuthUrl({
+          redirectUri:
+            (redirectUri as string) ||
+            "https://localhost:6001/auth/callback/instagram-standalone",
+        });
 
-// Register Post Reel Tool
-mcpServer.registerTool(
-  "instagram-post-reel",
-  {
-    title: "Post Reel to Instagram",
-    description: "Posts a Reel to Instagram.",
-    inputSchema: {
-      igUserId: z
-        .string()
-        .describe("The Instagram User ID of the account to post to."),
-      videoUrl: z
-        .string()
-        .url()
-        .describe("Public URL of the video to post as a Reel."),
-      coverUrl: z
-        .string()
-        .url()
-        .optional()
-        .describe(
-          "Public URL of the cover image for the Reel. If not provided, Instagram will use the first frame."
-        ),
-      caption: z.string().optional().describe("The caption for the Reel."),
-      userAccessToken: z
-        .string()
-        .describe("The access token of the Instagram user."),
-      shareToFeed: z
-        .boolean()
-        .optional()
-        .describe(
-          "Whether to also share the Reel to the main feed (default: true if not specified by IG). Check API docs for current default behavior if not explicitly set."
-        ),
-    },
-  },
-  async ({
-    igUserId,
-    userAccessToken,
-    videoUrl,
-    caption,
-    coverUrl,
-    shareToFeed,
-  }: {
-    igUserId: string;
-    userAccessToken: string;
-    videoUrl: string;
-    caption?: string;
-    coverUrl?: string;
-    shareToFeed?: boolean;
-  }) => {
-    try {
-      const result = await postReelToInstagram({
-        igUserId,
-        userAccessToken,
-        videoUrl,
-        caption,
-        coverUrl,
-        shareToFeed,
-      });
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Reel posted successfully! Post ID: ${result.postId}`,
-          },
-        ],
-        output: result,
-      };
-    } catch (error: any) {
-      return {
-        isError: true,
-        content: [
-          { type: "text", text: `Error posting Reel: ${error.message}` },
-        ],
-      };
+        logInfo("Instagram Auth Success", { state: result.state });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Instagram OAuth URL: ${result.oauthUrl}. State: ${result.state}`,
+            },
+          ],
+        };
+      }
+
+      case "instagram-post-image": {
+        logDebug("Instagram Post Image", "Starting image post process");
+        const { imageUrl, caption } = args as any;
+
+        logInfo("Image Post Request", {
+          imageUrl: imageUrl?.substring(0, 100) + "...",
+          captionLength: caption?.length || 0,
+        });
+
+        const result = await postImageToInstagram({
+          imageUrl,
+          caption,
+        });
+
+        logInfo("Image Post Success", { postId: result.postId });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Image posted successfully! Post ID: ${result.postId}`,
+            },
+          ],
+        };
+      }
+
+      case "instagram-post-carousel": {
+        logDebug("Instagram Post Carousel", "Starting carousel post process");
+        const { mediaItems, caption } = args as any;
+
+        logInfo("Carousel Post Request", {
+          mediaCount: mediaItems?.length || 0,
+          captionLength: caption?.length || 0,
+        });
+
+        const result = await postCarouselToInstagram({
+          mediaItems,
+          caption,
+        });
+
+        logInfo("Carousel Post Success", { postId: result.postId });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Carousel posted successfully! Post ID: ${result.postId}`,
+            },
+          ],
+        };
+      }
+
+      case "instagram-post-reel": {
+        logDebug("Instagram Post Reel", "Starting reel post process");
+        const { videoUrl, coverUrl, caption, shareToFeed } = args as any;
+
+        logInfo("Reel Post Request", {
+          hasVideo: !!videoUrl,
+          hasCover: !!coverUrl,
+          captionLength: caption?.length || 0,
+          shareToFeed,
+        });
+
+        const result = await postReelToInstagram({
+          videoUrl,
+          caption,
+          coverUrl,
+          shareToFeed,
+        });
+
+        logInfo("Reel Post Success", { postId: result.postId });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Reel posted successfully! Post ID: ${result.postId}`,
+            },
+          ],
+        };
+      }
+
+      default:
+        logError("Unknown Tool", `Tool not found: ${name}`);
+        throw new Error(`Tool not found: ${name}`);
     }
+  } catch (error: any) {
+    logError(`Tool Execution (${name})`, error);
+
+    // Return detailed error information
+    const errorMessage = error.message || "Unknown error occurred";
+    const errorType = error.type || "UNKNOWN_ERROR";
+    const statusCode = error.statusCode;
+    const fbTraceId = error.fbTraceId;
+
+    let detailedError = `Error: ${errorMessage}`;
+    if (errorType !== "UNKNOWN_ERROR") {
+      detailedError += ` (Type: ${errorType})`;
+    }
+    if (statusCode) {
+      detailedError += ` (Status: ${statusCode})`;
+    }
+    if (fbTraceId) {
+      detailedError += ` (Trace ID: ${fbTraceId})`;
+    }
+
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: detailedError,
+        },
+      ],
+    };
   }
-);
+});
 
 app.get("/", (req, res) => {
   res.send("MCP Instagram Server is running!");
 });
 
 async function main() {
-  // Start the Express server (optional, if you need HTTP endpoints)
-  app.listen(port, () => {
-    console.log(`HTTP server is listening on port ${port}`);
-  });
-
   // Connect MCP server to StdioTransport
   const transport = new StdioServerTransport();
-  await mcpServer.connect(transport);
-  console.error("Instagram MCP Server running on stdio");
+  await server.connect(transport);
+  logInfo("MCP Server", "Instagram MCP Server running on stdio");
 }
 
 main().catch((error) => {

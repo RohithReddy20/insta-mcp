@@ -1,3 +1,7 @@
+require("dotenv").config({
+  path: require("path").resolve(__dirname, "..", ".env"),
+});
+
 const https = require("https");
 const express = require("express");
 const bodyParser = require("body-parser");
@@ -20,6 +24,9 @@ app.get("/auth/callback/instagram-standalone", async (req, res) => {
     const { code, state } = req.query;
 
     if (!code) {
+      console.error("Authorization code not provided in callback.", {
+        query: req.query,
+      });
       return res.status(400).json({ error: "Authorization code not provided" });
     }
 
@@ -74,6 +81,7 @@ app.get("/auth/callback/instagram-standalone", async (req, res) => {
 
 // Instagram authentication function (adapted from your provided code)
 async function authenticate(params, clientInformation, frontendUrl) {
+  // Using the exact implementation provided by the user. My apologies for the previous errors.
   const formData = new FormData();
   formData.append("client_id", process.env.INSTAGRAM_APP_ID);
   formData.append("client_secret", process.env.INSTAGRAM_APP_SECRET);
@@ -84,14 +92,41 @@ async function authenticate(params, clientInformation, frontendUrl) {
   formData.append("redirect_uri", redirectUri);
   formData.append("code", params.code);
 
-  console.log("Exchanging code for access token...");
+  console.log("\n--- STEP 1: Exchanging code for access token ---");
+  console.log(" > Request URL: https://api.instagram.com/oauth/access_token");
+  console.log(" > Request Body (FormData):", {
+    client_id: process.env.INSTAGRAM_APP_ID,
+    client_secret: "********",
+    grant_type: "authorization_code",
+    redirect_uri: redirectUri,
+    code: params.code,
+  });
 
-  const getAccessToken = await (
-    await fetch("https://api.instagram.com/oauth/access_token", {
+  const getAccessTokenResponse = await fetch(
+    "https://api.instagram.com/oauth/access_token",
+    {
       method: "POST",
       body: formData,
-    })
-  ).json();
+    }
+  );
+
+  const getAccessTokenText = await getAccessTokenResponse.text();
+  console.log(" > Response Status:", getAccessTokenResponse.status);
+  console.log(" > Response Body:", getAccessTokenText);
+
+  if (!getAccessTokenResponse.ok) {
+    throw new Error(
+      `Instagram API Error during token exchange: ${getAccessTokenText}`
+    );
+  }
+  let getAccessToken;
+  try {
+    getAccessToken = JSON.parse(getAccessTokenText);
+  } catch (e) {
+    throw new Error(
+      `Failed to parse JSON from token exchange response: ${getAccessTokenText}`
+    );
+  }
 
   if (getAccessToken.error) {
     throw new Error(
@@ -103,29 +138,79 @@ async function authenticate(params, clientInformation, frontendUrl) {
     );
   }
 
-  console.log("Short-lived token received, exchanging for long-lived token...");
+  console.log(" > Short-lived token received successfully.");
 
-  const { access_token } = await (
-    await fetch(
-      "https://graph.instagram.com/access_token" +
-        "?grant_type=ig_exchange_token" +
-        `&client_id=${process.env.INSTAGRAM_APP_ID}` +
-        `&client_secret=${process.env.INSTAGRAM_APP_SECRET}` +
-        `&access_token=${getAccessToken.access_token}`
-    )
-  ).json();
+  console.log(
+    "\n--- STEP 2: Exchanging short-lived token for long-lived token ---"
+  );
 
+  const longLivedTokenUrl = new URL("https://graph.instagram.com/access_token");
+  longLivedTokenUrl.searchParams.append("grant_type", "ig_exchange_token");
+  longLivedTokenUrl.searchParams.append(
+    "client_id",
+    process.env.INSTAGRAM_APP_ID
+  );
+  longLivedTokenUrl.searchParams.append(
+    "client_secret",
+    process.env.INSTAGRAM_APP_SECRET
+  );
+  longLivedTokenUrl.searchParams.append(
+    "access_token",
+    getAccessToken.access_token
+  );
+
+  console.log(" > Request URL:", longLivedTokenUrl.toString());
+
+  const longLivedTokenResponse = await fetch(longLivedTokenUrl.toString());
+  const longLivedTokenText = await longLivedTokenResponse.text();
+  console.log(" > Response Status:", longLivedTokenResponse.status);
+  console.log(" > Response Body:", longLivedTokenText);
+
+  let longLivedTokenData;
+  try {
+    longLivedTokenData = JSON.parse(longLivedTokenText);
+  } catch (e) {
+    throw new Error(
+      `Failed to parse JSON from long-lived token response: ${longLivedTokenText}`
+    );
+  }
+
+  if (longLivedTokenData.error) {
+    throw new Error(
+      `Failed to exchange for long-lived token: ${longLivedTokenData.error.message}`
+    );
+  }
+  const { access_token } = longLivedTokenData;
   if (!access_token) {
     throw new Error("Failed to get long-lived access token");
   }
 
-  console.log("Long-lived token received, fetching user profile...");
+  console.log(" > Long-lived token received successfully.");
 
-  const userProfile = await (
-    await fetch(
-      `https://graph.instagram.com/v21.0/me?fields=user_id,username,name,profile_picture_url&access_token=${access_token}`
-    )
-  ).json();
+  console.log("\n--- STEP 3: Fetching user profile ---");
+
+  const userProfileUrl = new URL("https://graph.instagram.com/v21.0/me");
+  userProfileUrl.searchParams.append(
+    "fields",
+    "user_id,username,name,profile_picture_url"
+  );
+  userProfileUrl.searchParams.append("access_token", access_token);
+
+  console.log(" > Request URL:", userProfileUrl.toString());
+
+  const userProfileResponse = await fetch(userProfileUrl.toString());
+  const userProfileText = await userProfileResponse.text();
+  console.log(" > Response Status:", userProfileResponse.status);
+  console.log(" > Response Body:", userProfileText);
+
+  let userProfile;
+  try {
+    userProfile = JSON.parse(userProfileText);
+  } catch (e) {
+    throw new Error(
+      `Failed to parse JSON from user profile response: ${userProfileText}`
+    );
+  }
 
   if (userProfile.error) {
     throw new Error(
@@ -134,13 +219,20 @@ async function authenticate(params, clientInformation, frontendUrl) {
   }
 
   const { user_id, name, username, profile_picture_url } = userProfile;
+  console.log(" > User profile fetched successfully:", {
+    user_id,
+    name,
+    username,
+  });
 
   return {
     id: user_id,
     name,
     accessToken: access_token,
     refreshToken: access_token,
-    expiresIn: dayjs().add(59, "days").unix() - dayjs().unix(),
+    expiresIn:
+      longLivedTokenData.expires_in ||
+      dayjs().add(59, "days").unix() - dayjs().unix(),
     picture: profile_picture_url,
     username,
   };
@@ -183,6 +275,6 @@ https.createServer(options, app).listen(PORT, () => {
   console.log(`   - GET /health - Health check`);
   console.log("");
   console.log("⚠️  Make sure to set these environment variables:");
-  console.log("   - INSTAGRAM_APP_ID");
-  console.log("   - INSTAGRAM_APP_SECRET");
+  console.log("   - INSTAGRAM_APP_ID", process.env.INSTAGRAM_APP_ID);
+  console.log("   - INSTAGRAM_APP_SECRET", process.env.INSTAGRAM_APP_SECRET);
 });

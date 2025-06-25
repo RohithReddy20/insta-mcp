@@ -1,29 +1,20 @@
-import { z } from "zod";
-import { makeId } from "../utils/makeId"; // Assuming makeId is moved to a utils directory
+import { makeId } from "../utils/makeId.js"; // Assuming makeId is moved to a utils directory
 
-// Define the schema for the tool input
-export const instagramAuthInputSchema = z.object({
-  redirectUri: z
-    .string()
-    .url()
-    .describe("The redirect URI for OAuth callback."),
-  // state: z.string().optional().describe("An opaque value used to maintain state between the request and callback.") // State will be generated internally
-});
+// Define the interface for the tool input
+export interface InstagramAuthInput {
+  redirectUri: string;
+}
 
-// Define the schema for the tool output
-export const instagramAuthOutputSchema = z.object({
-  oauthUrl: z
-    .string()
-    .url()
-    .describe("The Instagram OAuth URL for authentication."),
-  state: z.string().describe("The state parameter used in the OAuth URL."),
-  // codeVerifier: z.string().optional().describe("PKCE code verifier, if used by client for added security."), // Not strictly needed from standalone provider example for this tool's output
-});
+// Define the interface for the tool output
+export interface InstagramAuthOutput {
+  oauthUrl: string;
+  state: string;
+}
 
 // Function to generate Instagram OAuth URL based on instagram-standalone.provider.ts
 export function getInstagramAuthUrl(
-  input: z.infer<typeof instagramAuthInputSchema>
-): z.infer<typeof instagramAuthOutputSchema> {
+  input: InstagramAuthInput
+): InstagramAuthOutput {
   const { redirectUri } = input;
   const appId = process.env.INSTAGRAM_APP_ID;
 

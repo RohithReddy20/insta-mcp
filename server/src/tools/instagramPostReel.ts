@@ -1,5 +1,6 @@
-import { z } from "zod";
 import fetch, { Response } from "node-fetch";
+import * as fs from "fs";
+import * as path from "path";
 
 // Based on instagram.service.ts
 const GRAPH_API_VERSION = "v19.0";
@@ -68,39 +69,19 @@ function handleInstagramError(
   );
 }
 
-// Define the schema for the tool input
-export const instagramPostReelInputSchema = z.object({
-  igUserId: z
-    .string()
-    .describe("The Instagram User ID of the account to post to."),
-  videoUrl: z
-    .string()
-    .url()
-    .describe("Public URL of the video to post as a Reel."),
-  coverUrl: z
-    .string()
-    .url()
-    .optional()
-    .describe(
-      "Public URL of the cover image for the Reel. If not provided, Instagram will use the first frame."
-    ),
-  caption: z.string().optional().describe("The caption for the Reel."),
-  userAccessToken: z
-    .string()
-    .describe("The access token of the Instagram user."),
-  shareToFeed: z
-    .boolean()
-    .optional()
-    .describe(
-      "Whether to also share the Reel to the main feed (default: true if not specified by IG). Check API docs for current default behavior if not explicitly set."
-    ),
-});
+// Define the interface for the tool input
+export interface InstagramPostReelInput {
+  videoUrl: string;
+  coverUrl?: string;
+  caption?: string;
+  shareToFeed?: boolean;
+}
 
-// Define the schema for the tool output
-export const instagramPostReelOutputSchema = z.object({
-  postId: z.string().describe("The ID of the created Instagram Reel post."),
-  status: z.string().describe("Status of the Reel post creation"),
-});
+// Define the interface for the tool output
+export interface InstagramPostReelOutput {
+  postId: string;
+  status: string;
+}
 
 interface MediaContainerResponse {
   id: string;
@@ -167,16 +148,20 @@ async function waitForContainerReady(
 }
 
 export async function postReelToInstagram(
-  input: z.infer<typeof instagramPostReelInputSchema>
-): Promise<z.infer<typeof instagramPostReelOutputSchema>> {
-  const {
-    igUserId,
-    videoUrl,
-    coverUrl,
-    caption,
-    userAccessToken,
-    shareToFeed,
-  } = input;
+  input: InstagramPostReelInput
+): Promise<InstagramPostReelOutput> {
+  const { videoUrl, coverUrl, caption, shareToFeed } = input;
+  const userDataPath = path.resolve(process.cwd(), "../user.json");
+  const userDataRaw = fs.readFileSync(userDataPath, "utf-8");
+  const userData = JSON.parse(userDataRaw);
+  const { id: igUserId, accessToken: userAccessToken } = userData;
+
+  if (!igUserId || !userAccessToken) {
+    throw new InstagramApiError(
+      "The user.json file must contain 'id' and 'accessToken' properties.",
+      InstagramErrorType.INVALID_REQUEST
+    );
+  }
 
   try {
     // Step 1: Create media container for the Reel video
@@ -243,9 +228,11 @@ export async function postReelToInstagram(
         InstagramErrorType.UNKNOWN_ERROR
       );
 
-    return { postId: mediaId, status: "Reel posted successfully." };
-  } catch (error: any) {
-    if (error instanceof InstagramApiError) throw error;
+    return {
+      postId: mediaId,
+      status: "Reel posted successfully",
+    };
+  } catch (error) {
     throw handleInstagramError(error);
   }
 }
